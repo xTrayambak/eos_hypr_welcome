@@ -1,11 +1,23 @@
-import std/[logging, sets, browsers]
+import std/[logging, sets, strutils, options, json, browsers]
 import colored_logger
 import owlkettle, owlkettle/[playground, adw, bindings/gtk]
 
-import ./[pacman, style, config, clipboard]
+import ./[
+  argparse,
+  pacman, 
+  style, 
+  config, 
+  clipboard,
+  translations
+]
 
 const
   Version {.strdefine: "NimblePkgVersion".} = "???"
+
+let args = parseArguments()
+var language: Locale = case getValue("general.language").get().getStr().toLowerAscii()
+of "hindi": Hindi
+else: English
 
 type
   AppPage* = enum
@@ -43,10 +55,11 @@ proc showErrorMessage(app: AppState, action, error: string) {.inline.} =
       showErrorMessage(app, "Failed to invoke clipboard copy!", "wl-copy returned a non-zero exit code.")
 
 method view(app: AppState): Widget =
+  setValue("ux.page", app.page)
   result = gui:
     AdwWindow:
       defaultSize = (200, 120)
-
+      
       Box:
         spacing = 4
 
@@ -58,7 +71,7 @@ method view(app: AppState): Widget =
               Box {.halign: AlignCenter.}:
                 Label:
                   style = [StyleClass("header")]
-                  text = "<b>Find your way at the EndeavourOS website!</b>"
+                  text = "<b>" & exploreWebsite(language) & "</b>"
                   useMarkup = true
 
               Box {.halign: AlignCenter, valign: AlignCenter.}:
@@ -100,7 +113,7 @@ method view(app: AppState): Widget =
             of PostInstall:
               Box {.halign: AlignCenter.}:
                 Label:
-                  text = "<b>Post-Install Tasks</b>"
+                  text = "<b>" & postInstallTasks(language) & "</b>"
                   useMarkup = true
                   style = [StyleClass("header")]
 
@@ -114,7 +127,7 @@ method view(app: AppState): Widget =
                       text = "Update Mirrors (Arch, reflector-simple)"
 
                       proc clicked =
-                        let res = rateMirrors(0)
+                        let res = rateMirrors(rpReflectorSimple, 3600'u64)
 
                         if not res.success:
                           app.showErrorMessage("Failed to update mirrors!", res.error)
@@ -122,19 +135,37 @@ method view(app: AppState): Widget =
                     Button:
                       text = "Update Mirrors (Arch, rate-mirrors)"
 
+                      proc clicked =
+                        let res = rateMirrors(rpRateMirrors, 3600)
+
+                        if not res.success:
+                          app.showErrorMessage("Failed to update mirrors!", res.error)
+
                     Button:
                       text = "Update Mirrors (EndeavourOS)"
 
-                    Button:
-                      text = "Update System (yay)"
+                      proc clicked =
+                        let res = rateMirrors(rpEosRankMirrors, args.getUintFlag("update-delay", 3600'u64))
+
+                        if not res.success:
+                          app.showErrorMessage("Failed to update mirrors!", res.error)
 
                     Button:
-                      text = "Update System (eos-update --yay)"
+                      text = "Update System (" & findAurHelper() & ')'
+
+                    Button:
+                      text = "Update System (eos-update --" & findAurHelper() & ')'
+                      proc clicked =
+                        let res = eosUpdate()
+
+                        if not res.success:
+                          app.showErrorMessage("Failed to update EndeavourOS!", res.error)
 
                     Button:
                       text = "Package cleanup configuration"
             else: discard
-       
+        
+        # Sidebar
         OverlaySplitView:
           enableHideGesture = true
           enableShowGesture = true
@@ -146,7 +177,7 @@ method view(app: AppState): Widget =
 
           ListBox:
             selectionMode = SelectionSingle
-            selected = toHashSet([app.page])
+            selected = toHashSet([getValue("ux.page").get().getInt()])
             
             Button:
               text = "General"
@@ -194,6 +225,7 @@ proc main {.inline.} =
 
   info "Compiled with GTK@" & gtkVer 
   info "Compiled with libadwaita@" & adwVer
+  info "Using language: " & $language
 
   adw.brew(
     "com.github.xTrayambak.eos_hypr_welcome",
@@ -204,8 +236,9 @@ proc main {.inline.} =
       )
     ]
   )
-
+  
   info "Exiting!"
+  writeSettings()
 
 when isMainModule:
   main()
